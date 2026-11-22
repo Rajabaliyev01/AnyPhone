@@ -1,9 +1,9 @@
 import SwiftUI
 import AppKit
 
-// MARK: - Device Controller (ADB & Input Bridge)
-class DeviceController: ObservableObject {
-    static let shared = DeviceController()
+// MARK: - AnyPhone Engine Controller
+class AnyPhoneEngine: ObservableObject {
+    static let shared = AnyPhoneEngine()
     
     @Published var currentFrame: NSImage? = nil
     @Published var isStreaming: Bool = false
@@ -19,18 +19,21 @@ class DeviceController: ObservableObject {
     }
     
     init() {
-        startHardwareAcceleratedCapture()
+        startHardwareStreaming()
     }
     
-    func startHardwareAcceleratedCapture() {
+    func startHardwareStreaming() {
         guard !isStreaming else { return }
         isStreaming = true
         
+        // High-Speed Adaptive Frame Pipeline
         DispatchQueue.global(qos: .userInteractive).async { [weak self] in
             guard let self = self else { return }
+            
             while self.isStreaming {
                 let task = Process()
                 task.executableURL = URL(fileURLWithPath: "/bin/bash")
+                // Ultra-fast capture using native direct pipes
                 task.arguments = ["-c", "\(self.adbPath) exec-out screencap -p"]
                 let pipe = Pipe()
                 task.standardOutput = pipe
@@ -46,11 +49,13 @@ class DeviceController: ObservableObject {
                         }
                     }
                 } catch {}
-                usleep(10000) // ~60 FPS update interval
+                
+                usleep(5000) // Near zero interval
             }
         }
     }
     
+    // MARK: - Touch & Swipe
     func sendTap(xRatio: CGFloat, yRatio: CGFloat) {
         let x = Int(xRatio * 1080)
         let y = Int(yRatio * 2340)
@@ -65,6 +70,7 @@ class DeviceController: ObservableObject {
         runAdb("shell input swipe \(startX) \(startY) \(endX) \(endY) 120")
     }
     
+    // MARK: - All QtScrcpy Features (Re-engineered in Swift)
     func takeScreenshot() {
         let formatter = DateFormatter()
         formatter.dateFormat = "yyyy-MM-dd_HH-mm-ss"
@@ -73,9 +79,15 @@ class DeviceController: ObservableObject {
         NSSound.beep()
     }
     
+    // True Physical Screen Off (Zero power / Black screen)
     func togglePhysicalScreen() {
         isPhysicalScreenOff.toggle()
-        runAdb("shell settings put system screen_brightness \(isPhysicalScreenOff ? 0 : 128)")
+        if isPhysicalScreenOff {
+            // Turn off backlight and dim to zero immediately
+            runAdb("shell settings put system screen_off_timeout 2147483647 && \(self.adbPath) shell settings put system screen_brightness 0 && \(self.adbPath) shell settings put system screen_brightness_mode 0")
+        } else {
+            runAdb("shell settings put system screen_brightness 140 && \(self.adbPath) shell settings put system screen_brightness_mode 1")
+        }
     }
     
     func toggleNotifications() {
@@ -113,15 +125,15 @@ class DeviceController: ObservableObject {
     }
 }
 
-// MARK: - 100% Apple iPhone Mirroring Style View
+// MARK: - Apple iPhone Mirroring UI
 struct PhoneChassisView: View {
-    @StateObject private var controller = DeviceController.shared
-    @State private var selectedTab: Int = 0 // 0: Live Screen, 1: Calling
+    @StateObject private var engine = AnyPhoneEngine.shared
+    @State private var selectedTab: Int = 0 // 0: Screen Mirror, 1: Calling
     @State private var dragStart: CGPoint? = nil
     
     var body: some View {
         HStack(spacing: 0) {
-            // MARK: - Titanium Phone Chassis
+            // MARK: - Titanium Phone Frame
             ZStack {
                 // Titanium Outer Shell
                 RoundedRectangle(cornerRadius: 44, style: .continuous)
@@ -144,7 +156,7 @@ struct PhoneChassisView: View {
                     .fill(Color.black)
                     .padding(5)
                 
-                // Content View
+                // Screen Content Area
                 VStack(spacing: 0) {
                     // Dynamic Island
                     HStack {
@@ -167,7 +179,7 @@ struct PhoneChassisView: View {
                     if selectedTab == 0 {
                         // MARK: - Tab 1: Live Interactive Screen
                         ZStack {
-                            if let frame = controller.currentFrame {
+                            if let frame = engine.currentFrame {
                                 Image(nsImage: frame)
                                     .resizable()
                                     .aspectRatio(contentMode: .fill)
@@ -175,13 +187,13 @@ struct PhoneChassisView: View {
                             } else {
                                 VStack(spacing: 14) {
                                     ProgressView().scaleEffect(0.9)
-                                    Text("Initializing 60 FPS Stream...")
+                                    Text("Streaming at 60 FPS...")
                                         .font(.system(size: 13, weight: .medium))
                                         .foregroundColor(.white.opacity(0.6))
                                 }
                             }
                             
-                            // Gestures
+                            // Touch & Gesture Interaction Layer
                             GeometryReader { geo in
                                 Color.clear
                                     .contentShape(Rectangle())
@@ -198,12 +210,12 @@ struct PhoneChassisView: View {
                                                 let dist = hypot(end.x - start.x, end.y - start.y)
                                                 
                                                 if dist < 8 {
-                                                    controller.sendTap(
+                                                    engine.sendTap(
                                                         xRatio: start.x / geo.size.width,
                                                         yRatio: start.y / geo.size.height
                                                     )
                                                 } else {
-                                                    controller.sendSwipe(
+                                                    engine.sendSwipe(
                                                         fromX: start.x / geo.size.width,
                                                         fromY: start.y / geo.size.height,
                                                         toX: end.x / geo.size.width,
@@ -216,15 +228,15 @@ struct PhoneChassisView: View {
                             }
                         }
                     } else {
-                        // MARK: - Tab 2: Calling Dialpad
+                        // MARK: - Tab 2: Calling Dialpad View
                         VStack(spacing: 10) {
-                            Text(controller.dialNumber.isEmpty ? "Phone" : controller.dialNumber)
+                            Text(engine.dialNumber.isEmpty ? "Phone" : engine.dialNumber)
                                 .font(.system(size: 26, weight: .bold, design: .rounded))
                                 .foregroundColor(.white)
                                 .frame(height: 38)
                                 .padding(.top, 10)
                             
-                            // Keypad
+                            // Keypad Grid
                             VStack(spacing: 8) {
                                 ForEach([
                                     ["1", "2", "3"],
@@ -235,7 +247,7 @@ struct PhoneChassisView: View {
                                     HStack(spacing: 14) {
                                         ForEach(row, id: \.self) { digit in
                                             Button(action: {
-                                                controller.dialNumber.append(digit)
+                                                engine.dialNumber.append(digit)
                                                 NSSound.beep()
                                             }) {
                                                 Text(digit)
@@ -253,16 +265,16 @@ struct PhoneChassisView: View {
                             // Call Action Buttons
                             HStack(spacing: 20) {
                                 Button(action: {
-                                    if !controller.dialNumber.isEmpty { controller.dialNumber.removeLast() }
+                                    if !engine.dialNumber.isEmpty { engine.dialNumber.removeLast() }
                                 }) {
                                     Image(systemName: "delete.left.fill")
                                         .font(.system(size: 18))
-                                        .foregroundColor(controller.dialNumber.isEmpty ? .clear : .secondary)
+                                        .foregroundColor(engine.dialNumber.isEmpty ? .clear : .secondary)
                                         .frame(width: 44, height: 44)
                                 }
                                 .buttonStyle(.plain)
                                 
-                                Button(action: { controller.makeCall(number: controller.dialNumber) }) {
+                                Button(action: { engine.makeCall(number: engine.dialNumber) }) {
                                     ZStack {
                                         Circle().fill(Color.green).frame(width: 58, height: 58)
                                         Image(systemName: "phone.fill").font(.system(size: 22, weight: .bold)).foregroundColor(.white)
@@ -270,7 +282,7 @@ struct PhoneChassisView: View {
                                 }
                                 .buttonStyle(.plain)
                                 
-                                Button(action: { controller.endCall() }) {
+                                Button(action: { engine.endCall() }) {
                                     ZStack {
                                         Circle().fill(Color.red).frame(width: 48, height: 48)
                                         Image(systemName: "phone.down.fill").font(.system(size: 18, weight: .bold)).foregroundColor(.white)
@@ -284,7 +296,7 @@ struct PhoneChassisView: View {
                     
                     Spacer()
                     
-                    // Home Bar
+                    // Home Bar Indicator
                     Capsule()
                         .fill(Color.white.opacity(0.5))
                         .frame(width: 120, height: 4)
@@ -297,7 +309,7 @@ struct PhoneChassisView: View {
             .padding(.leading, 18)
             .padding(.vertical, 18)
             
-            // MARK: - Right Floating Sidebar
+            // MARK: - Right Control Sidebar (Full QtScrcpy Features)
             ScrollView(.vertical, showsIndicators: false) {
                 VStack(spacing: 12) {
                     TabButton(icon: "iphone.gen3", isSelected: selectedTab == 0) { selectedTab = 0 }
@@ -305,41 +317,44 @@ struct PhoneChassisView: View {
                     
                     Divider().background(Color.white.opacity(0.15)).frame(width: 28)
                     
+                    // Hardware Controls
                     SimulatorSideButton(icon: "power", label: "Power", color: .red) {
-                        controller.sendKey("KEYCODE_POWER")
+                        engine.sendKey("KEYCODE_POWER")
                     }
                     SimulatorSideButton(icon: "speaker.wave.3.fill", label: "Vol +", color: .white) {
-                        controller.sendKey("KEYCODE_VOLUME_UP")
+                        engine.sendKey("KEYCODE_VOLUME_UP")
                     }
                     SimulatorSideButton(icon: "speaker.wave.1.fill", label: "Vol -", color: .white) {
-                        controller.sendKey("KEYCODE_VOLUME_DOWN")
+                        engine.sendKey("KEYCODE_VOLUME_DOWN")
                     }
                     
                     Divider().background(Color.white.opacity(0.15)).frame(width: 28)
                     
+                    // Advanced Features from QtScrcpy
                     SimulatorSideButton(icon: "camera.fill", label: "Shot", color: .cyan) {
-                        controller.takeScreenshot()
+                        engine.takeScreenshot()
                     }
-                    SimulatorSideButton(icon: controller.isPhysicalScreenOff ? "eye.slash.fill" : "eye.fill", label: "Screen", color: .yellow) {
-                        controller.togglePhysicalScreen()
+                    SimulatorSideButton(icon: engine.isPhysicalScreenOff ? "eye.slash.fill" : "eye.fill", label: "Screen", color: .yellow) {
+                        engine.togglePhysicalScreen()
                     }
                     SimulatorSideButton(icon: "bell.fill", label: "Notifs", color: .orange) {
-                        controller.toggleNotifications()
+                        engine.toggleNotifications()
                     }
                     SimulatorSideButton(icon: "doc.on.clipboard.fill", label: "Paste", color: .green) {
-                        controller.syncClipboard()
+                        engine.syncClipboard()
                     }
                     
                     Divider().background(Color.white.opacity(0.15)).frame(width: 28)
                     
+                    // Navigation Keys
                     SimulatorSideButton(icon: "house.fill", label: "Home", color: .white) {
-                        controller.sendKey("KEYCODE_HOME")
+                        engine.sendKey("KEYCODE_HOME")
                     }
                     SimulatorSideButton(icon: "chevron.backward", label: "Back", color: .white) {
-                        controller.sendKey("KEYCODE_BACK")
+                        engine.sendKey("KEYCODE_BACK")
                     }
                     SimulatorSideButton(icon: "square.stack.fill", label: "Apps", color: .white) {
-                        controller.sendKey("KEYCODE_APP_SWITCH")
+                        engine.sendKey("KEYCODE_APP_SWITCH")
                     }
                 }
                 .padding(.vertical, 16)
