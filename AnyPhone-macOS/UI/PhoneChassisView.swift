@@ -379,6 +379,16 @@ struct PhoneChassisView: View {
                         .buttonStyle(PlainButtonStyle())
                         .help("Wi-Fi va USB o'rtasida almashtirish")
                         
+                        // Audio Bridge (Mac Speakers & Mic)
+                        SidebarIconButton(icon: AudioController.shared.isAudioStreaming ? "waveform.circle.fill" : "headphones", color: .indigo) {
+                            if AudioController.shared.isAudioStreaming {
+                                AudioController.shared.stopAudioBridge()
+                            } else {
+                                AudioController.shared.startAudioBridge(adbPath: controller.adbPath, serial: controller.activeSerial)
+                            }
+                        }
+                        .help("Mac dinamik va mikrofoni bilan ikki tomonlama audio")
+                        
                         Divider().background(Color.white.opacity(0.2))
                         
                         SidebarIconButton(icon: "power", color: .red) {
