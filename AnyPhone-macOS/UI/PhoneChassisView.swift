@@ -2,14 +2,13 @@ import SwiftUI
 import AppKit
 import AVFoundation
 
-// MARK: - Native Metal / VideoToolbox Stream View
+// MARK: - Native Metal / VideoToolbox Stream View with Real-time Touch & Hold
 struct HardwareVideoView: NSViewRepresentable {
     @ObservedObject var controller = EngineController.shared
     
-    func makeNSView(context: Context) -> NSView {
-        let view = NSView()
-        view.wantsLayer = true
-        view.layer?.backgroundColor = NSColor.black.cgColor
+    func makeNSView(context: Context) -> InteractiveScreenView {
+        let view = InteractiveScreenView()
+        view.controller = controller
         
         let player = H264StreamPlayer.shared
         player.sampleBufferLayer.frame = view.bounds
@@ -17,16 +16,77 @@ struct HardwareVideoView: NSViewRepresentable {
         player.sampleBufferLayer.cornerRadius = 34
         player.sampleBufferLayer.masksToBounds = true
         
+        view.wantsLayer = true
+        view.layer?.backgroundColor = NSColor.black.cgColor
         view.layer?.addSublayer(player.sampleBufferLayer)
-        player.startStream(serial: controller.activeSerial)
         
+        player.startStream(serial: controller.activeSerial)
         return view
     }
     
-    func updateNSView(_ nsView: NSView, context: Context) {
+    func updateNSView(_ nsView: InteractiveScreenView, context: Context) {
+        nsView.controller = controller
         if let layer = nsView.layer?.sublayers?.first as? AVSampleBufferDisplayLayer {
             layer.frame = nsView.bounds
         }
+    }
+}
+
+// MARK: - Interactive Screen View for Real-time Mouse Down / Hold / Drag / Up
+class InteractiveScreenView: NSView {
+    weak var controller: EngineController?
+    private var isPressing = false
+    private var pressStartTime: Date?
+    private var startPoint: CGPoint = .zero
+    private var lastPoint: CGPoint = .zero
+    private var hasMoved = false
+    
+    override var acceptsFirstResponder: Bool { true }
+    
+    override func mouseDown(with event: NSEvent) {
+        let loc = convert(event.locationInWindow, from: nil)
+        // Flip Y for macOS coordinate system (macOS is bottom-left, Android is top-left)
+        let normalizedY = bounds.height - loc.y
+        let rx = max(0, min(1, loc.x / bounds.width))
+        let ry = max(0, min(1, normalizedY / bounds.height))
+        
+        isPressing = true
+        pressStartTime = Date()
+        startPoint = CGPoint(x: rx, y: ry)
+        lastPoint = startPoint
+        hasMoved = false
+        
+        // Immediately send DOWN event to Android
+        controller?.sendTouchEvent(action: "DOWN", xRatio: rx, yRatio: ry)
+    }
+    
+    override func mouseDragged(with event: NSEvent) {
+        guard isPressing else { return }
+        let loc = convert(event.locationInWindow, from: nil)
+        let normalizedY = bounds.height - loc.y
+        let rx = max(0, min(1, loc.x / bounds.width))
+        let ry = max(0, min(1, normalizedY / bounds.height))
+        
+        let dist = hypot(rx - lastPoint.x, ry - lastPoint.y)
+        if dist > 0.008 { // Throttle slightly to ensure smooth 60fps tracking
+            hasMoved = true
+            lastPoint = CGPoint(x: rx, y: ry)
+            controller?.sendTouchEvent(action: "MOVE", xRatio: rx, yRatio: ry)
+        }
+    }
+    
+    override func mouseUp(with event: NSEvent) {
+        guard isPressing else { return }
+        let loc = convert(event.locationInWindow, from: nil)
+        let normalizedY = bounds.height - loc.y
+        let rx = max(0, min(1, loc.x / bounds.width))
+        let ry = max(0, min(1, normalizedY / bounds.height))
+        
+        // Send UP event to conclude tap, long-press, or drag
+        controller?.sendTouchEvent(action: "UP", xRatio: rx, yRatio: ry)
+        
+        isPressing = false
+        pressStartTime = nil
     }
 }
 
@@ -144,18 +204,11 @@ class EngineController: ObservableObject {
         }
     }
     
-    func sendTap(xRatio: CGFloat, yRatio: CGFloat) {
+    // MARK: - Real-time Touch Events (DOWN, MOVE, UP, HOLD)
+    func sendTouchEvent(action: String, xRatio: CGFloat, yRatio: CGFloat) {
         let x = Int(xRatio * 1080)
         let y = Int(yRatio * 2340)
-        runAdb("shell input tap \(x) \(y)")
-    }
-    
-    func sendSwipe(fromX: CGFloat, fromY: CGFloat, toX: CGFloat, toY: CGFloat) {
-        let startX = Int(fromX * 1080)
-        let startY = Int(fromY * 2340)
-        let endX = Int(toX * 1080)
-        let endY = Int(toY * 2340)
-        runAdb("shell input swipe \(startX) \(startY) \(endX) \(endY) 120")
+        runAdb("shell input motionevent \(action) \(x) \(y)")
     }
     
     func takeScreenshot() {
@@ -168,10 +221,8 @@ class EngineController: ObservableObject {
     func togglePhysicalScreen() {
         isPhysicalScreenOff.toggle()
         if isPhysicalScreenOff {
-            // Haqiqiy jismoniy ekranni to'liq o'chirish (Black out display 0)
             runAdb("shell cmd display power-off 0")
         } else {
-            // Ekranni qayta yoqish
             runAdb("shell cmd display power-reset 0")
         }
     }
@@ -214,7 +265,6 @@ class EngineController: ObservableObject {
 // MARK: - Main Phone Chassis View
 struct PhoneChassisView: View {
     @StateObject private var controller = EngineController.shared
-    @State private var dragStart: CGPoint? = nil
     
     var body: some View {
         ZStack {
@@ -253,38 +303,11 @@ struct PhoneChassisView: View {
                         .fill(Color.black)
                         .frame(width: 362, height: 778)
                     
-                    // Display Area (100% Pure Screen Mirroring)
+                    // Display Area (Interactive Screen with Real-Time Hold, Tap, Drag)
                     ZStack {
                         HardwareVideoView(controller: controller)
                             .clipShape(RoundedRectangle(cornerRadius: 34, style: .continuous))
-                            .contentShape(Rectangle())
-                            .gesture(
-                                DragGesture(minimumDistance: 0)
-                                    .onChanged { val in
-                                        if dragStart == nil {
-                                            dragStart = val.startLocation
-                                        }
-                                    }
-                                    .onEnded { val in
-                                        let w: CGFloat = 352
-                                        let h: CGFloat = 768
-                                        if let start = dragStart {
-                                            let dist = hypot(val.location.x - start.x, val.location.y - start.y)
-                                            if dist < 8 {
-                                                let rx = max(0, min(1, val.location.x / w))
-                                                let ry = max(0, min(1, val.location.y / h))
-                                                controller.sendTap(xRatio: rx, yRatio: ry)
-                                            } else {
-                                                let sx = max(0, min(1, start.x / w))
-                                                let sy = max(0, min(1, start.y / h))
-                                                let ex = max(0, min(1, val.location.x / w))
-                                                let ey = max(0, min(1, val.location.y / h))
-                                                controller.sendSwipe(fromX: sx, fromY: sy, toX: ex, toY: ey)
-                                            }
-                                        }
-                                        dragStart = nil
-                                    }
-                            )
+                            .frame(width: 352, height: 768)
                         
                         // Dynamic Island (Apple iPhone style)
                         VStack {
@@ -324,6 +347,7 @@ struct PhoneChassisView: View {
                                     controller.sendKey("KEYCODE_HOME")
                                 }
                         }
+                        .allowsHitTesting(false) // Allows touches to reach screen view underneath
                     }
                     .frame(width: 352, height: 768)
                 }
