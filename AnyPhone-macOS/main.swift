@@ -5,14 +5,12 @@ import AppKit
 class AnyPhoneManager: ObservableObject {
     static let shared = AnyPhoneManager()
     
-    @Published var isConnected: Bool = false
+    @Published var isConnected: Bool = true
     @Published var deviceName: String = "Samsung Galaxy A15"
     @Published var connectionMode: String = "Wi-Fi (Wireless)"
     
     @Published var isCalling: Bool = false
-    @Published var callDuration: String = "00:00"
-    @Published var isMuted: Bool = false
-    @Published var isSpeakerOn: Bool = true
+    @Published var dialNumber: String = ""
     
     var adbPath: String {
         let qtAdb = "/Applications/QtScrcpy.app/Contents/MacOS/adb"
@@ -23,11 +21,12 @@ class AnyPhoneManager: ObservableObject {
     }
     
     func startMirroring() {
-        // Connect to AnyPhone server and open stream
         DispatchQueue.global(qos: .userInitiated).async {
             let task = Process()
             task.executableURL = URL(fileURLWithPath: "/bin/bash")
-            task.arguments = ["-c", "\(self.adbPath) shell am start -a android.intent.action.MAIN -c android.intent.category.HOME"]
+            // Launch directly via clean engine without old Chinese UI
+            let script = NSString(string: "~/Desktop/Projects/AnyPhone/AnyPhone-macOS/launch_clean_mirror.sh").expandingTildeInPath
+            task.arguments = [script]
             try? task.run()
         }
     }
@@ -58,24 +57,23 @@ class AnyPhoneManager: ObservableObject {
     }
 }
 
-// MARK: - Main Native AnyPhone Window (iPhone Mirroring Aesthetic)
+// MARK: - Native Mirroring View
 struct AnyPhoneAppView: View {
     @StateObject private var manager = AnyPhoneManager.shared
-    @State private var selectedTab: Int = 0 // 0: Screen Mirror, 1: Phone Calls, 2: Settings
-    @State private var dialNumber: String = ""
+    @State private var selectedTab: Int = 0 // 0: Mirror, 1: Call
     
     var body: some View {
         HStack(spacing: 0) {
-            // MARK: - Left Phone Viewport (Apple Simulator Frame)
+            // MARK: - Phone Frame
             ZStack {
-                // Titanium chassis frame
+                // Titanium Body
                 RoundedRectangle(cornerRadius: 44, style: .continuous)
                     .fill(Color(white: 0.12))
                     .overlay(
                         RoundedRectangle(cornerRadius: 44, style: .continuous)
                             .stroke(
                                 LinearGradient(
-                                    colors: [Color.white.opacity(0.3), Color.white.opacity(0.08)],
+                                    colors: [Color.white.opacity(0.35), Color.white.opacity(0.08)],
                                     startPoint: .topLeading,
                                     endPoint: .bottomTrailing
                                 ),
@@ -91,67 +89,72 @@ struct AnyPhoneAppView: View {
                 
                 // Display Content
                 VStack(spacing: 0) {
-                    // Top Notch / Speaker
+                    // Dynamic Island / Speaker
                     HStack {
                         Spacer()
                         Capsule()
                             .fill(Color.black)
-                            .frame(width: 76, height: 20)
+                            .frame(width: 80, height: 22)
                             .overlay(
                                 Circle()
                                     .fill(Color(white: 0.2))
                                     .frame(width: 8, height: 8)
-                                    .padding(.trailing, 22),
+                                    .padding(.trailing, 24),
                                 alignment: .trailing
                             )
                         Spacer()
                     }
-                    .padding(.top, 12)
+                    .padding(.top, 10)
                     
                     if selectedTab == 0 {
-                        // Screen Mirror View
+                        // Mirroring Action Area
                         VStack(spacing: 16) {
                             Spacer()
+                            
                             Image(systemName: "iphone.gen3")
-                                .font(.system(size: 54, weight: .light))
-                                .foregroundColor(.white.opacity(0.35))
+                                .font(.system(size: 50, weight: .light))
+                                .foregroundColor(.white.opacity(0.4))
                             
                             Text(manager.deviceName)
                                 .font(.system(size: 16, weight: .semibold, design: .rounded))
                                 .foregroundColor(.white)
                             
-                            Text(manager.connectionMode)
-                                .font(.system(size: 11, weight: .medium))
-                                .foregroundColor(.green)
+                            HStack(spacing: 6) {
+                                Circle().fill(Color.green).frame(width: 7, height: 7)
+                                Text("Connected via Wi-Fi")
+                                    .font(.system(size: 12, weight: .medium))
+                                    .foregroundColor(.green)
+                            }
                             
                             Button(action: {
                                 manager.startMirroring()
                             }) {
-                                HStack(spacing: 6) {
+                                HStack(spacing: 8) {
                                     Image(systemName: "play.fill")
-                                        .font(.system(size: 11))
-                                    Text("Open Live Display")
-                                        .font(.system(size: 12, weight: .semibold))
+                                        .font(.system(size: 12))
+                                    Text("Start Mirroring")
+                                        .font(.system(size: 13, weight: .semibold))
                                 }
                                 .foregroundColor(.white)
-                                .padding(.horizontal, 16)
-                                .padding(.vertical, 8)
+                                .padding(.horizontal, 22)
+                                .padding(.vertical, 10)
                                 .background(Capsule().fill(Color.blue))
+                                .shadow(color: .blue.opacity(0.4), radius: 8, x: 0, y: 4)
                             }
                             .buttonStyle(.plain)
+                            .padding(.top, 8)
                             
                             Spacer()
                         }
-                    } else if selectedTab == 1 {
-                        // Calling Dialpad View
-                        VStack(spacing: 12) {
-                            Text(dialNumber.isEmpty ? "Phone" : dialNumber)
+                    } else {
+                        // Phone Dialer View
+                        VStack(spacing: 10) {
+                            Text(manager.dialNumber.isEmpty ? "Phone" : manager.dialNumber)
                                 .font(.system(size: 26, weight: .bold, design: .rounded))
                                 .foregroundColor(.white)
-                                .frame(height: 36)
+                                .frame(height: 38)
                                 .padding(.top, 10)
                             
-                            // Keypad
                             VStack(spacing: 8) {
                                 ForEach([
                                     ["1", "2", "3"],
@@ -161,11 +164,14 @@ struct AnyPhoneAppView: View {
                                 ], id: \.self) { row in
                                     HStack(spacing: 14) {
                                         ForEach(row, id: \.self) { digit in
-                                            Button(action: { dialNumber.append(digit) }) {
+                                            Button(action: {
+                                                manager.dialNumber.append(digit)
+                                                NSSound.beep()
+                                            }) {
                                                 Text(digit)
                                                     .font(.system(size: 22, weight: .medium, design: .rounded))
                                                     .foregroundColor(.white)
-                                                    .frame(width: 54, height: 54)
+                                                    .frame(width: 52, height: 52)
                                                     .background(Circle().fill(Color(white: 0.18)))
                                             }
                                             .buttonStyle(.plain)
@@ -175,15 +181,17 @@ struct AnyPhoneAppView: View {
                             }
                             
                             HStack(spacing: 20) {
-                                Button(action: { if !dialNumber.isEmpty { dialNumber.removeLast() } }) {
+                                Button(action: {
+                                    if !manager.dialNumber.isEmpty { manager.dialNumber.removeLast() }
+                                }) {
                                     Image(systemName: "delete.left.fill")
                                         .font(.system(size: 18))
-                                        .foregroundColor(dialNumber.isEmpty ? .clear : .secondary)
+                                        .foregroundColor(manager.dialNumber.isEmpty ? .clear : .secondary)
                                         .frame(width: 44, height: 44)
                                 }
                                 .buttonStyle(.plain)
                                 
-                                Button(action: { manager.makeCall(number: dialNumber) }) {
+                                Button(action: { manager.makeCall(number: manager.dialNumber) }) {
                                     ZStack {
                                         Circle().fill(Color.green).frame(width: 58, height: 58)
                                         Image(systemName: "phone.fill").font(.system(size: 22, weight: .bold)).foregroundColor(.white)
@@ -205,7 +213,7 @@ struct AnyPhoneAppView: View {
                     
                     Spacer()
                     
-                    // Home Bar
+                    // Home Indicator
                     Capsule()
                         .fill(Color.white.opacity(0.5))
                         .frame(width: 120, height: 4)
@@ -219,15 +227,11 @@ struct AnyPhoneAppView: View {
             
             // MARK: - Right Control Sidebar
             VStack(spacing: 14) {
-                // Tab Selectors
-                Group {
-                    TabButton(icon: "iphone.gen3", isSelected: selectedTab == 0) { selectedTab = 0 }
-                    TabButton(icon: "phone.fill", isSelected: selectedTab == 1) { selectedTab = 1 }
-                }
+                TabButton(icon: "iphone.gen3", isSelected: selectedTab == 0) { selectedTab = 0 }
+                TabButton(icon: "phone.fill", isSelected: selectedTab == 1) { selectedTab = 1 }
                 
                 Divider().background(Color.white.opacity(0.15)).frame(width: 28)
                 
-                // Hardware Keys
                 SimulatorSideButton(icon: "power", label: "Power", color: .red) {
                     manager.pressKey("KEYCODE_POWER")
                 }
