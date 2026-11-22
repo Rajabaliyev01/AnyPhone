@@ -1,0 +1,17 @@
+plugins {
+    id 'java'
+}
+
+group = 'com.anyphone'
+version = '1.0.0'
+
+repositories {
+    mavenCentral()
+}
+
+jar {
+    archiveBaseName = 'anyphone-server'
+    manifest {
+        attributes 'Main-Class': 'com.anyphone.server.AnyPhoneServer'
+    }
+}
