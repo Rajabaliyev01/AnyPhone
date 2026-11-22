@@ -34,7 +34,6 @@ struct HardwareVideoView: NSViewRepresentable {
 class EngineController: ObservableObject {
     static let shared = EngineController()
     
-    @Published var dialNumber: String = ""
     @Published var isPhysicalScreenOff: Bool = false
     @Published var connectionMode: String = "Wi-Fi" // "USB" or "Wi-Fi"
     @Published var activeSerial: String = "192.168.100.162:5555"
@@ -93,9 +92,7 @@ class EngineController: ObservableObject {
     func switchToWiFi() {
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             guard let self = self else { return }
-            // If USB is connected, ensure TCP/IP port is active
             _ = self.runAdbSync("tcpip 5555")
-            // Query IP
             let ipRoute = self.runAdbSync("shell ip route")
             var ip = "192.168.100.162"
             if let range = ipRoute.range(of: "src ") {
@@ -182,16 +179,6 @@ class EngineController: ObservableObject {
         runAdb("shell input keyevent \(key)")
     }
     
-    func callNumber(_ num: String) {
-        guard !num.isEmpty else { return }
-        let clean = num.replacingOccurrences(of: "#", with: "%23")
-        runAdb("shell am start -a android.intent.action.CALL -d tel:\(clean)")
-    }
-    
-    func endCall() {
-        runAdb("shell input keyevent KEYCODE_ENDCALL")
-    }
-    
     func syncClipboardToPhone() {
         if let str = NSPasteboard.general.string(forType: .string) {
             let encoded = str.replacingOccurrences(of: " ", with: "%s")
@@ -226,7 +213,6 @@ class EngineController: ObservableObject {
 // MARK: - Main Phone Chassis View
 struct PhoneChassisView: View {
     @StateObject private var controller = EngineController.shared
-    @State private var selectedTab = 0 // 0: Screen Mirror, 1: Dialer
     @State private var dragStart: CGPoint? = nil
     
     var body: some View {
@@ -266,45 +252,38 @@ struct PhoneChassisView: View {
                         .fill(Color.black)
                         .frame(width: 362, height: 778)
                     
-                    // Display Area
+                    // Display Area (100% Pure Screen Mirroring)
                     ZStack {
-                        if selectedTab == 0 {
-                            // 100% Native VideoToolbox H.264 Hardware Stream (Over Wi-Fi or USB)
-                            HardwareVideoView(controller: controller)
-                                .clipShape(RoundedRectangle(cornerRadius: 34, style: .continuous))
-                                .contentShape(Rectangle())
-                                .gesture(
-                                    DragGesture(minimumDistance: 0)
-                                        .onChanged { val in
-                                            if dragStart == nil {
-                                                dragStart = val.startLocation
+                        HardwareVideoView(controller: controller)
+                            .clipShape(RoundedRectangle(cornerRadius: 34, style: .continuous))
+                            .contentShape(Rectangle())
+                            .gesture(
+                                DragGesture(minimumDistance: 0)
+                                    .onChanged { val in
+                                        if dragStart == nil {
+                                            dragStart = val.startLocation
+                                        }
+                                    }
+                                    .onEnded { val in
+                                        let w: CGFloat = 352
+                                        let h: CGFloat = 768
+                                        if let start = dragStart {
+                                            let dist = hypot(val.location.x - start.x, val.location.y - start.y)
+                                            if dist < 8 {
+                                                let rx = max(0, min(1, val.location.x / w))
+                                                let ry = max(0, min(1, val.location.y / h))
+                                                controller.sendTap(xRatio: rx, yRatio: ry)
+                                            } else {
+                                                let sx = max(0, min(1, start.x / w))
+                                                let sy = max(0, min(1, start.y / h))
+                                                let ex = max(0, min(1, val.location.x / w))
+                                                let ey = max(0, min(1, val.location.y / h))
+                                                controller.sendSwipe(fromX: sx, fromY: sy, toX: ex, toY: ey)
                                             }
                                         }
-                                        .onEnded { val in
-                                            let w: CGFloat = 352
-                                            let h: CGFloat = 768
-                                            if let start = dragStart {
-                                                let dist = hypot(val.location.x - start.x, val.location.y - start.y)
-                                                if dist < 8 {
-                                                    let rx = max(0, min(1, val.location.x / w))
-                                                    let ry = max(0, min(1, val.location.y / h))
-                                                    controller.sendTap(xRatio: rx, yRatio: ry)
-                                                } else {
-                                                    let sx = max(0, min(1, start.x / w))
-                                                    let sy = max(0, min(1, start.y / h))
-                                                    let ex = max(0, min(1, val.location.x / w))
-                                                    let ey = max(0, min(1, val.location.y / h))
-                                                    controller.sendSwipe(fromX: sx, fromY: sy, toX: ex, toY: ey)
-                                                }
-                                            }
-                                            dragStart = nil
-                                        }
-                                )
-                        } else {
-                            // Phone Dialer View
-                            DialerView(controller: controller)
-                                .clipShape(RoundedRectangle(cornerRadius: 34, style: .continuous))
-                        }
+                                        dragStart = nil
+                                    }
+                            )
                         
                         // Dynamic Island (Apple iPhone style)
                         VStack {
@@ -377,13 +356,6 @@ struct PhoneChassisView: View {
                         
                         Divider().background(Color.white.opacity(0.2))
                         
-                        // Switch between Mirror & Dialpad
-                        SidebarIconButton(icon: selectedTab == 0 ? "phone.fill" : "iphone", color: .green) {
-                            selectedTab = (selectedTab == 0 ? 1 : 0)
-                        }
-                        
-                        Divider().background(Color.white.opacity(0.2))
-                        
                         SidebarIconButton(icon: "power", color: .red) {
                             controller.sendKey("KEYCODE_POWER")
                         }
@@ -450,99 +422,6 @@ struct SidebarIconButton: View {
                 )
         }
         .buttonStyle(PlainButtonStyle())
-    }
-}
-
-// MARK: - Dialer View
-struct DialerView: View {
-    @ObservedObject var controller: EngineController
-    
-    let buttons = [
-        ["1", "2", "3"],
-        ["4", "5", "6"],
-        ["7", "8", "9"],
-        ["*", "0", "#"]
-    ]
-    
-    var body: some View {
-        VStack(spacing: 16) {
-            Spacer().frame(height: 48)
-            
-            Text("AnyPhone Dialer")
-                .font(.headline)
-                .foregroundColor(.white.opacity(0.8))
-            
-            Text(controller.dialNumber.isEmpty ? "Raqamni tering" : controller.dialNumber)
-                .font(.system(size: 26, weight: .bold, design: .rounded))
-                .foregroundColor(.white)
-                .lineLimit(1)
-                .minimumScaleFactor(0.6)
-                .padding(.horizontal, 24)
-                .frame(height: 40)
-            
-            Spacer()
-            
-            VStack(spacing: 14) {
-                ForEach(buttons, id: \.self) { row in
-                    HStack(spacing: 24) {
-                        ForEach(row, id: \.self) { item in
-                            Button(action: {
-                                controller.dialNumber.append(item)
-                            }) {
-                                Text(item)
-                                    .font(.system(size: 24, weight: .medium, design: .rounded))
-                                    .foregroundColor(.white)
-                                    .frame(width: 68, height: 68)
-                                    .background(Color(white: 0.2))
-                                    .clipShape(Circle())
-                            }
-                            .buttonStyle(PlainButtonStyle())
-                        }
-                    }
-                }
-            }
-            
-            Spacer()
-            
-            HStack(spacing: 36) {
-                Button(action: {
-                    if !controller.dialNumber.isEmpty {
-                        controller.dialNumber.removeLast()
-                    }
-                }) {
-                    Image(systemName: "delete.left.fill")
-                        .font(.title2)
-                        .foregroundColor(.gray)
-                        .frame(width: 50, height: 50)
-                }
-                .buttonStyle(PlainButtonStyle())
-                
-                Button(action: {
-                    controller.callNumber(controller.dialNumber)
-                }) {
-                    Image(systemName: "phone.fill")
-                        .font(.title)
-                        .foregroundColor(.white)
-                        .frame(width: 68, height: 68)
-                        .background(Color.green)
-                        .clipShape(Circle())
-                }
-                .buttonStyle(PlainButtonStyle())
-                
-                Button(action: {
-                    controller.endCall()
-                }) {
-                    Image(systemName: "phone.down.fill")
-                        .font(.title2)
-                        .foregroundColor(.red)
-                        .frame(width: 50, height: 50)
-                }
-                .buttonStyle(PlainButtonStyle())
-            }
-            .padding(.bottom, 36)
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(Color(white: 0.08))
     }
 }
 
