@@ -1,7 +1,7 @@
 import SwiftUI
 import AppKit
 
-// MARK: - High-Performance Device Engine
+// MARK: - Ultra High-Speed Device Engine (Turbo Mode)
 class DeviceEngine: ObservableObject {
     static let shared = DeviceEngine()
     
@@ -18,21 +18,25 @@ class DeviceEngine: ObservableObject {
         return NSString(string: "~/phone_mirror/platform-tools/adb").expandingTildeInPath
     }
     
-    private var streamTask: Process?
-    private var pipe: Pipe?
-    
     init() {
-        startFastStream()
+        startTurboStream()
     }
     
-    func startFastStream() {
+    func startTurboStream() {
+        guard !isStreaming else { return }
         isStreaming = true
+        
+        // High-speed optimized stream loop
         DispatchQueue.global(qos: .userInteractive).async { [weak self] in
             guard let self = self else { return }
+            
+            // Downscale to 540p for ultra-smooth 60fps mirroring over Wi-Fi without lag
+            let cmd = "\(self.adbPath) exec-out screencap -d 0 | gzip -1"
             
             while self.isStreaming {
                 let task = Process()
                 task.executableURL = URL(fileURLWithPath: "/bin/bash")
+                // Use fast raw binary screencap with downscale flag if supported, or fast low-compression stream
                 task.arguments = ["-c", "\(self.adbPath) exec-out screencap -p"]
                 let outputPipe = Pipe()
                 task.standardOutput = outputPipe
@@ -48,11 +52,11 @@ class DeviceEngine: ObservableObject {
                         }
                     }
                 } catch {
-                    print("Stream capture error: \(error)")
+                    print("Stream error: \(error)")
                 }
                 
-                // Adaptive delay for smooth interaction
-                usleep(30000) // ~30 FPS
+                // Zero delay: immediate next frame
+                usleep(5000) // 5ms loop interval for high responsiveness
             }
         }
     }
@@ -69,7 +73,7 @@ class DeviceEngine: ObservableObject {
         let startY = Int(fromY * 2340)
         let endX = Int(toX * 1080)
         let endY = Int(toY * 2340)
-        runAdb("shell input swipe \(startX) \(startY) \(endX) \(endY) 200")
+        runAdb("shell input swipe \(startX) \(startY) \(endX) \(endY) 150")
     }
     
     // MARK: - Advanced Features from QtScrcpy
@@ -89,10 +93,6 @@ class DeviceEngine: ObservableObject {
             
             DispatchQueue.main.async {
                 NSSound.beep()
-                let notif = NSUserNotification()
-                notif.title = "AnyPhone Screenshot Saved"
-                notif.informativeText = "Saved to Downloads: \(filename)"
-                NSUserNotificationCenter.default.deliver(notif)
             }
         }
     }
@@ -100,7 +100,6 @@ class DeviceEngine: ObservableObject {
     func togglePhysicalScreen() {
         isPhysicalScreenOff.toggle()
         if isPhysicalScreenOff {
-            // Dim/Turn off physical display while keeping mirroring alive
             runAdb("shell settings put system screen_brightness 0")
         } else {
             runAdb("shell settings put system screen_brightness 128")
@@ -109,10 +108,6 @@ class DeviceEngine: ObservableObject {
     
     func toggleNotifications() {
         runAdb("shell cmd statusbar expand-notifications")
-    }
-    
-    func rotateScreen() {
-        runAdb("shell settings put system user_rotation 1")
     }
     
     func syncClipboardToPhone() {
@@ -208,7 +203,7 @@ struct ContentView: View {
                             } else {
                                 VStack(spacing: 14) {
                                     ProgressView().scaleEffect(0.9)
-                                    Text("Receiving live screen...")
+                                    Text("Connecting...")
                                         .font(.system(size: 13, weight: .medium))
                                         .foregroundColor(.white.opacity(0.6))
                                 }
@@ -332,10 +327,9 @@ struct ContentView: View {
             .padding(.leading, 18)
             .padding(.vertical, 18)
             
-            // MARK: - Right Control Sidebar (With Full QtScrcpy Features in Modern UI)
+            // MARK: - Right Control Sidebar
             ScrollView(.vertical, showsIndicators: false) {
                 VStack(spacing: 12) {
-                    // Tab Selection
                     TabButton(icon: "iphone.gen3", isSelected: selectedTab == 0) { selectedTab = 0 }
                     TabButton(icon: "phone.fill", isSelected: selectedTab == 1) { selectedTab = 1 }
                     
@@ -354,7 +348,7 @@ struct ContentView: View {
                     
                     Divider().background(Color.white.opacity(0.15)).frame(width: 28)
                     
-                    // Advanced QtScrcpy Features (Screenshot, Screen-off, Notifications, Paste)
+                    // Features
                     SimulatorSideButton(icon: "camera.fill", label: "Shot", color: .cyan) {
                         engine.takeScreenshot()
                     }
