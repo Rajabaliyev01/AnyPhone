@@ -22,7 +22,7 @@ public class H264StreamPlayer: NSObject, ObservableObject {
         sampleBufferLayer.backgroundColor = NSColor.black.cgColor
     }
     
-    public func startStream() {
+    public func startStream(serial: String? = nil) {
         guard !isRunning else { return }
         isRunning = true
         buffer.removeAll()
@@ -30,16 +30,23 @@ public class H264StreamPlayer: NSObject, ObservableObject {
         let adbPath = "/Applications/QtScrcpy.app/Contents/MacOS/adb"
         let proc = Process()
         proc.executableURL = URL(fileURLWithPath: adbPath)
-        // 60 FPS, optimized 720x1560 resolution for perfect responsive mirroring
-        proc.arguments = [
+        
+        var args: [String] = []
+        if let s = serial, !s.isEmpty {
+            args += ["-s", s]
+        }
+        
+        // 60 FPS, optimized 720x1560 resolution with 6Mbps for ultra-smooth Wi-Fi & USB
+        args += [
             "shell",
             "screenrecord",
             "--output-format=h264",
             "--size", "720x1560",
-            "--bit-rate", "8000000",
+            "--bit-rate", "6000000",
             "--time-limit", "0",
             "-"
         ]
+        proc.arguments = args
         
         let pipe = Pipe()
         proc.standardOutput = pipe
@@ -56,9 +63,9 @@ public class H264StreamPlayer: NSObject, ObservableObject {
         
         do {
             try proc.run()
-            print("[AnyPhone] H.264 Hardware Stream Started!")
+            print("[AnyPhone] H.264 Stream started successfully! Target: \(serial ?? "auto")")
         } catch {
-            print("[AnyPhone] Failed to start screenrecord: \(error)")
+            print("[AnyPhone] Failed to start stream: \(error)")
         }
     }
     
@@ -68,6 +75,13 @@ public class H264StreamPlayer: NSObject, ObservableObject {
         process?.terminate()
         process = nil
         inputPipe = nil
+    }
+    
+    public func restartStream(serial: String? = nil) {
+        stopStream()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
+            self?.startStream(serial: serial)
+        }
     }
     
     private func processIncomingChunk(_ chunk: Data) {
@@ -81,7 +95,6 @@ public class H264StreamPlayer: NSObject, ObservableObject {
             var firstStart = -1
             var secondStart = -1
             var firstPrefixLen = 0
-            var secondPrefixLen = 0
             
             var i = 0
             while i < bytes.count - 3 {
@@ -94,7 +107,6 @@ public class H264StreamPlayer: NSObject, ObservableObject {
                             continue
                         } else {
                             secondStart = i
-                            secondPrefixLen = 3
                             break
                         }
                     } else if i < bytes.count - 4 && bytes[i+2] == 0 && bytes[i+3] == 1 {
@@ -105,7 +117,6 @@ public class H264StreamPlayer: NSObject, ObservableObject {
                             continue
                         } else {
                             secondStart = i
-                            secondPrefixLen = 4
                             break
                         }
                     }
@@ -118,7 +129,6 @@ public class H264StreamPlayer: NSObject, ObservableObject {
                 buffer.removeSubrange(0..<secondStart)
                 handleNALU(naluData)
             } else {
-                // Wait for more data
                 break
             }
         }
@@ -140,10 +150,10 @@ public class H264StreamPlayer: NSObject, ObservableObject {
         
         guard let formatDesc = self.formatDesc else { return }
         
-        // Convert to AVCC format (prepend 4-byte big endian length)
+        // Convert to AVCC format
         var length = UInt32(naluData.count).bigEndian
         var blockBuffer: CMBlockBuffer?
-        var status = CMBlockBufferCreateWithMemoryBlock(
+        let status = CMBlockBufferCreateWithMemoryBlock(
             allocator: kCFAllocatorDefault,
             memoryBlock: nil,
             blockLength: 4 + naluData.count,
@@ -181,7 +191,7 @@ public class H264StreamPlayer: NSObject, ObservableObject {
             decodeTimeStamp: .invalid
         )
         
-        status = CMSampleBufferCreateReady(
+        let createStatus = CMSampleBufferCreateReady(
             allocator: kCFAllocatorDefault,
             dataBuffer: block,
             formatDescription: formatDesc,
@@ -193,13 +203,10 @@ public class H264StreamPlayer: NSObject, ObservableObject {
             sampleBufferOut: &sampleBuffer
         )
         
-        if status == noErr, let sb = sampleBuffer {
+        if createStatus == noErr, let sb = sampleBuffer {
             DispatchQueue.main.async { [weak self] in
                 guard let self = self else { return }
-                if self.sampleBufferLayer.status == .failed {
-                    self.sampleBufferLayer.flush()
-                }
-                self.sampleBufferLayer.enqueue(sb)
+                self.sampleBufferLayer.sampleBufferRenderer.enqueue(sb)
             }
         }
     }
@@ -222,7 +229,7 @@ public class H264StreamPlayer: NSObject, ObservableObject {
                     formatDescriptionOut: &self.formatDesc
                 )
                 if status == noErr {
-                    print("[AnyPhone] Hardware Video Format Description created successfully!")
+                    print("[AnyPhone] Video format description updated.")
                 }
             }
         }

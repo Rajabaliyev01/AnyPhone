@@ -4,6 +4,8 @@ import AVFoundation
 
 // MARK: - Native Metal / VideoToolbox Stream View
 struct HardwareVideoView: NSViewRepresentable {
+    @ObservedObject var controller = EngineController.shared
+    
     func makeNSView(context: Context) -> NSView {
         let view = NSView()
         view.wantsLayer = true
@@ -16,7 +18,7 @@ struct HardwareVideoView: NSViewRepresentable {
         player.sampleBufferLayer.masksToBounds = true
         
         view.layer?.addSublayer(player.sampleBufferLayer)
-        player.startStream()
+        player.startStream(serial: controller.activeSerial)
         
         return view
     }
@@ -28,12 +30,15 @@ struct HardwareVideoView: NSViewRepresentable {
     }
 }
 
-// MARK: - Controller (Touch & Phone Actions)
+// MARK: - Controller (Touch & Phone Actions & Multi-connection USB/Wi-Fi)
 class EngineController: ObservableObject {
     static let shared = EngineController()
     
     @Published var dialNumber: String = ""
     @Published var isPhysicalScreenOff: Bool = false
+    @Published var connectionMode: String = "Wi-Fi" // "USB" or "Wi-Fi"
+    @Published var activeSerial: String = "192.168.100.162:5555"
+    @Published var isConnected: Bool = true
     
     var adbPath: String {
         let qtAdb = "/Applications/QtScrcpy.app/Contents/MacOS/adb"
@@ -41,6 +46,105 @@ class EngineController: ObservableObject {
             return qtAdb
         }
         return NSString(string: "~/phone_mirror/platform-tools/adb").expandingTildeInPath
+    }
+    
+    init() {
+        refreshDevices()
+    }
+    
+    func refreshDevices() {
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            guard let self = self else { return }
+            let out = self.runAdbSync("devices")
+            let lines = out.components(separatedBy: .newlines)
+            var wifiDevice: String? = nil
+            var usbDevice: String? = nil
+            
+            for line in lines where line.contains("\tdevice") {
+                let parts = line.components(separatedBy: "\t")
+                if let dev = parts.first?.trimmingCharacters(in: .whitespaces) {
+                    if dev.contains(":") {
+                        wifiDevice = dev
+                    } else {
+                        usbDevice = dev
+                    }
+                }
+            }
+            
+            DispatchQueue.main.async {
+                if self.connectionMode == "Wi-Fi" && wifiDevice != nil {
+                    self.activeSerial = wifiDevice!
+                    self.isConnected = true
+                } else if let usb = usbDevice {
+                    self.activeSerial = usb
+                    self.connectionMode = "USB"
+                    self.isConnected = true
+                } else if let wifi = wifiDevice {
+                    self.activeSerial = wifi
+                    self.connectionMode = "Wi-Fi"
+                    self.isConnected = true
+                } else {
+                    self.isConnected = false
+                }
+            }
+        }
+    }
+    
+    func switchToWiFi() {
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            guard let self = self else { return }
+            // If USB is connected, ensure TCP/IP port is active
+            _ = self.runAdbSync("tcpip 5555")
+            // Query IP
+            let ipRoute = self.runAdbSync("shell ip route")
+            var ip = "192.168.100.162"
+            if let range = ipRoute.range(of: "src ") {
+                let sub = ipRoute[range.upperBound...]
+                let foundIp = sub.components(separatedBy: .whitespaces).first?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                if foundIp.contains(".") {
+                    ip = foundIp
+                }
+            }
+            _ = self.runAdbSync("connect \(ip):5555")
+            
+            DispatchQueue.main.async {
+                self.activeSerial = "\(ip):5555"
+                self.connectionMode = "Wi-Fi"
+                H264StreamPlayer.shared.restartStream(serial: self.activeSerial)
+            }
+        }
+    }
+    
+    func switchToUSB() {
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            guard let self = self else { return }
+            let out = self.runAdbSync("devices")
+            let lines = out.components(separatedBy: .newlines)
+            var usb: String? = nil
+            for line in lines where line.contains("\tdevice") {
+                let d = line.components(separatedBy: "\t").first?.trimmingCharacters(in: .whitespaces) ?? ""
+                if !d.contains(":") && !d.isEmpty {
+                    usb = d
+                    break
+                }
+            }
+            
+            DispatchQueue.main.async {
+                if let usb = usb {
+                    self.activeSerial = usb
+                    self.connectionMode = "USB"
+                    H264StreamPlayer.shared.restartStream(serial: self.activeSerial)
+                }
+            }
+        }
+    }
+    
+    func toggleConnectionMode() {
+        if connectionMode == "Wi-Fi" {
+            switchToUSB()
+        } else {
+            switchToWiFi()
+        }
     }
     
     func sendTap(xRatio: CGFloat, yRatio: CGFloat) {
@@ -67,7 +171,6 @@ class EngineController: ObservableObject {
     func togglePhysicalScreen() {
         isPhysicalScreenOff.toggle()
         if isPhysicalScreenOff {
-            // Samsung screen off: set minimum brightness and short timeout
             runAdb("shell settings put system screen_brightness 0")
             runAdb("shell settings put system screen_off_timeout 600000")
         } else {
@@ -101,9 +204,22 @@ class EngineController: ObservableObject {
             guard let self = self else { return }
             let task = Process()
             task.executableURL = URL(fileURLWithPath: "/bin/sh")
-            task.arguments = ["-c", "\(self.adbPath) \(cmd)"]
+            let target = self.activeSerial.isEmpty ? "" : "-s \(self.activeSerial)"
+            task.arguments = ["-c", "\(self.adbPath) \(target) \(cmd)"]
             try? task.run()
         }
+    }
+    
+    private func runAdbSync(_ cmd: String) -> String {
+        let task = Process()
+        task.executableURL = URL(fileURLWithPath: "/bin/sh")
+        task.arguments = ["-c", "\(self.adbPath) \(cmd)"]
+        let pipe = Pipe()
+        task.standardOutput = pipe
+        try? task.run()
+        task.waitUntilExit()
+        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        return String(data: data, encoding: .utf8) ?? ""
     }
 }
 
@@ -153,8 +269,8 @@ struct PhoneChassisView: View {
                     // Display Area
                     ZStack {
                         if selectedTab == 0 {
-                            // 100% Native VideoToolbox H.264 Hardware Stream
-                            HardwareVideoView()
+                            // 100% Native VideoToolbox H.264 Hardware Stream (Over Wi-Fi or USB)
+                            HardwareVideoView(controller: controller)
                                 .clipShape(RoundedRectangle(cornerRadius: 34, style: .continuous))
                                 .contentShape(Rectangle())
                                 .gesture(
@@ -170,12 +286,10 @@ struct PhoneChassisView: View {
                                             if let start = dragStart {
                                                 let dist = hypot(val.location.x - start.x, val.location.y - start.y)
                                                 if dist < 8 {
-                                                    // Quick Tap
                                                     let rx = max(0, min(1, val.location.x / w))
                                                     let ry = max(0, min(1, val.location.y / h))
                                                     controller.sendTap(xRatio: rx, yRatio: ry)
                                                 } else {
-                                                    // Swipe
                                                     let sx = max(0, min(1, start.x / w))
                                                     let sy = max(0, min(1, start.y / h))
                                                     let ex = max(0, min(1, val.location.x / w))
@@ -237,6 +351,32 @@ struct PhoneChassisView: View {
                 // MARK: - Quick Action HUD Sidebar
                 VStack(spacing: 12) {
                     Group {
+                        // Wi-Fi / USB Connection Status Pill Button
+                        Button(action: {
+                            controller.toggleConnectionMode()
+                        }) {
+                            VStack(spacing: 3) {
+                                Image(systemName: controller.connectionMode == "Wi-Fi" ? "wifi" : "cable.connector")
+                                    .font(.system(size: 14, weight: .bold))
+                                Text(controller.connectionMode)
+                                    .font(.system(size: 9, weight: .semibold))
+                            }
+                            .foregroundColor(.white)
+                            .frame(width: 44, height: 44)
+                            .background(
+                                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                    .fill(controller.connectionMode == "Wi-Fi" ? Color.cyan.opacity(0.4) : Color.green.opacity(0.4))
+                                    .overlay(
+                                        RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                            .stroke(controller.connectionMode == "Wi-Fi" ? Color.cyan : Color.green, lineWidth: 1.5)
+                                    )
+                            )
+                        }
+                        .buttonStyle(PlainButtonStyle())
+                        .help("Wi-Fi va USB o'rtasida almashtirish")
+                        
+                        Divider().background(Color.white.opacity(0.2))
+                        
                         // Switch between Mirror & Dialpad
                         SidebarIconButton(icon: selectedTab == 0 ? "phone.fill" : "iphone", color: .green) {
                             selectedTab = (selectedTab == 0 ? 1 : 0)
