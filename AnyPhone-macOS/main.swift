@@ -1,17 +1,14 @@
 import SwiftUI
 import AppKit
 
-// MARK: - Device Engine & Screen Streamer
+// MARK: - High-Performance Device Engine
 class DeviceEngine: ObservableObject {
     static let shared = DeviceEngine()
     
     @Published var currentFrame: NSImage? = nil
     @Published var isStreaming: Bool = false
-    @Published var deviceName: String = "Samsung Galaxy A15"
-    @Published var isWireless: Bool = true
-    
     @Published var dialNumber: String = ""
-    @Published var isCalling: Bool = false
+    @Published var isPhysicalScreenOff: Bool = false
     
     var adbPath: String {
         let qtAdb = "/Applications/QtScrcpy.app/Contents/MacOS/adb"
@@ -21,38 +18,46 @@ class DeviceEngine: ObservableObject {
         return NSString(string: "~/phone_mirror/platform-tools/adb").expandingTildeInPath
     }
     
+    private var streamTask: Process?
+    private var pipe: Pipe?
+    
     init() {
-        startStream()
+        startFastStream()
     }
     
-    func startStream() {
-        guard !isStreaming else { return }
+    func startFastStream() {
         isStreaming = true
-        
-        // Fast frame capture loop via ADB exec-out
         DispatchQueue.global(qos: .userInteractive).async { [weak self] in
             guard let self = self else { return }
+            
             while self.isStreaming {
                 let task = Process()
                 task.executableURL = URL(fileURLWithPath: "/bin/bash")
-                // Fast binary screen capture
                 task.arguments = ["-c", "\(self.adbPath) exec-out screencap -p"]
-                let pipe = Pipe()
-                task.standardOutput = pipe
-                try? task.run()
-                task.waitUntilExit()
+                let outputPipe = Pipe()
+                task.standardOutput = outputPipe
                 
-                let data = pipe.fileHandleForReading.readDataToEndOfFile()
-                if let image = NSImage(data: data) {
-                    DispatchQueue.main.async {
-                        self.currentFrame = image
+                do {
+                    try task.run()
+                    let data = outputPipe.fileHandleForReading.readDataToEndOfFile()
+                    task.waitUntilExit()
+                    
+                    if !data.isEmpty, let img = NSImage(data: data) {
+                        DispatchQueue.main.async {
+                            self.currentFrame = img
+                        }
                     }
+                } catch {
+                    print("Stream capture error: \(error)")
                 }
-                usleep(40000) // ~25 FPS smooth streaming
+                
+                // Adaptive delay for smooth interaction
+                usleep(30000) // ~30 FPS
             }
         }
     }
     
+    // MARK: - Touch & Gestures
     func sendTap(xRatio: CGFloat, yRatio: CGFloat) {
         let x = Int(xRatio * 1080)
         let y = Int(yRatio * 2340)
@@ -64,26 +69,74 @@ class DeviceEngine: ObservableObject {
         let startY = Int(fromY * 2340)
         let endX = Int(toX * 1080)
         let endY = Int(toY * 2340)
-        runAdb("shell input swipe \(startX) \(startY) \(endX) \(endY) 250")
+        runAdb("shell input swipe \(startX) \(startY) \(endX) \(endY) 200")
     }
     
-    func sendKey(_ keycode: String) {
-        runAdb("shell input keyevent \(keycode)")
+    // MARK: - Advanced Features from QtScrcpy
+    func takeScreenshot() {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd_HH-mm-ss"
+        let filename = "Screenshot_\(formatter.string(from: Date())).png"
+        let dest = NSString(string: "~/Downloads/\(filename)").expandingTildeInPath
+        
+        DispatchQueue.global(qos: .userInitiated).async {
+            let cmd = "\(self.adbPath) exec-out screencap -p > \"\(dest)\""
+            let task = Process()
+            task.executableURL = URL(fileURLWithPath: "/bin/bash")
+            task.arguments = ["-c", cmd]
+            try? task.run()
+            task.waitUntilExit()
+            
+            DispatchQueue.main.async {
+                NSSound.beep()
+                let notif = NSUserNotification()
+                notif.title = "AnyPhone Screenshot Saved"
+                notif.informativeText = "Saved to Downloads: \(filename)"
+                NSUserNotificationCenter.default.deliver(notif)
+            }
+        }
+    }
+    
+    func togglePhysicalScreen() {
+        isPhysicalScreenOff.toggle()
+        if isPhysicalScreenOff {
+            // Dim/Turn off physical display while keeping mirroring alive
+            runAdb("shell settings put system screen_brightness 0")
+        } else {
+            runAdb("shell settings put system screen_brightness 128")
+        }
+    }
+    
+    func toggleNotifications() {
+        runAdb("shell cmd statusbar expand-notifications")
+    }
+    
+    func rotateScreen() {
+        runAdb("shell settings put system user_rotation 1")
+    }
+    
+    func syncClipboardToPhone() {
+        if let clipboard = NSPasteboard.general.string(forType: .string) {
+            let escaped = clipboard.replacingOccurrences(of: "\"", with: "\\\"").replacingOccurrences(of: " ", with: "%s")
+            runAdb("shell input text \"\(escaped)\"")
+        }
     }
     
     func makeCall(number: String) {
         guard !number.isEmpty else { return }
         let clean = number.replacingOccurrences(of: "#", with: "%23").replacingOccurrences(of: "+", with: "%2B")
         runAdb("shell am start -a android.intent.action.CALL -d tel:\(clean)")
-        self.isCalling = true
     }
     
     func endCall() {
         runAdb("shell input keyevent KEYCODE_ENDCALL")
-        self.isCalling = false
     }
     
-    private func runAdb(_ cmd: String) {
+    func sendKey(_ keycode: String) {
+        runAdb("shell input keyevent \(keycode)")
+    }
+    
+    func runAdb(_ cmd: String) {
         DispatchQueue.global(qos: .userInitiated).async {
             let task = Process()
             task.executableURL = URL(fileURLWithPath: "/bin/bash")
@@ -93,7 +146,7 @@ class DeviceEngine: ObservableObject {
     }
 }
 
-// MARK: - Main Application View (100% Apple iPhone Mirroring Style)
+// MARK: - Main Application View (Apple iPhone Mirroring Style)
 struct ContentView: View {
     @StateObject private var engine = DeviceEngine.shared
     @State private var selectedTab: Int = 0 // 0: Screen Mirror, 1: Calling
@@ -119,7 +172,7 @@ struct ContentView: View {
                     )
                     .shadow(color: .black.opacity(0.6), radius: 24, x: 0, y: 12)
                 
-                // Screen Bezel
+                // Inner Screen Bezel
                 RoundedRectangle(cornerRadius: 38, style: .continuous)
                     .fill(Color.black)
                     .padding(5)
@@ -155,7 +208,7 @@ struct ContentView: View {
                             } else {
                                 VStack(spacing: 14) {
                                     ProgressView().scaleEffect(0.9)
-                                    Text("Connecting live screen...")
+                                    Text("Receiving live screen...")
                                         .font(.system(size: 13, weight: .medium))
                                         .foregroundColor(.white.opacity(0.6))
                                 }
@@ -279,48 +332,65 @@ struct ContentView: View {
             .padding(.leading, 18)
             .padding(.vertical, 18)
             
-            // MARK: - Right Control Sidebar (Floating Toolbar)
-            VStack(spacing: 14) {
-                // Tab Selection
-                TabButton(icon: "iphone.gen3", isSelected: selectedTab == 0) { selectedTab = 0 }
-                TabButton(icon: "phone.fill", isSelected: selectedTab == 1) { selectedTab = 1 }
-                
-                Divider().background(Color.white.opacity(0.15)).frame(width: 28)
-                
-                // Hardware Keys
-                SimulatorSideButton(icon: "power", label: "Power", color: .red) {
-                    engine.sendKey("KEYCODE_POWER")
+            // MARK: - Right Control Sidebar (With Full QtScrcpy Features in Modern UI)
+            ScrollView(.vertical, showsIndicators: false) {
+                VStack(spacing: 12) {
+                    // Tab Selection
+                    TabButton(icon: "iphone.gen3", isSelected: selectedTab == 0) { selectedTab = 0 }
+                    TabButton(icon: "phone.fill", isSelected: selectedTab == 1) { selectedTab = 1 }
+                    
+                    Divider().background(Color.white.opacity(0.15)).frame(width: 28)
+                    
+                    // Hardware Controls
+                    SimulatorSideButton(icon: "power", label: "Power", color: .red) {
+                        engine.sendKey("KEYCODE_POWER")
+                    }
+                    SimulatorSideButton(icon: "speaker.wave.3.fill", label: "Vol +", color: .white) {
+                        engine.sendKey("KEYCODE_VOLUME_UP")
+                    }
+                    SimulatorSideButton(icon: "speaker.wave.1.fill", label: "Vol -", color: .white) {
+                        engine.sendKey("KEYCODE_VOLUME_DOWN")
+                    }
+                    
+                    Divider().background(Color.white.opacity(0.15)).frame(width: 28)
+                    
+                    // Advanced QtScrcpy Features (Screenshot, Screen-off, Notifications, Paste)
+                    SimulatorSideButton(icon: "camera.fill", label: "Shot", color: .cyan) {
+                        engine.takeScreenshot()
+                    }
+                    SimulatorSideButton(icon: engine.isPhysicalScreenOff ? "eye.slash.fill" : "eye.fill", label: "Screen", color: .yellow) {
+                        engine.togglePhysicalScreen()
+                    }
+                    SimulatorSideButton(icon: "bell.fill", label: "Notifs", color: .orange) {
+                        engine.toggleNotifications()
+                    }
+                    SimulatorSideButton(icon: "doc.on.clipboard.fill", label: "Paste", color: .green) {
+                        engine.syncClipboardToPhone()
+                    }
+                    
+                    Divider().background(Color.white.opacity(0.15)).frame(width: 28)
+                    
+                    // Navigation Keys
+                    SimulatorSideButton(icon: "house.fill", label: "Home", color: .white) {
+                        engine.sendKey("KEYCODE_HOME")
+                    }
+                    SimulatorSideButton(icon: "chevron.backward", label: "Back", color: .white) {
+                        engine.sendKey("KEYCODE_BACK")
+                    }
+                    SimulatorSideButton(icon: "square.stack.fill", label: "Apps", color: .white) {
+                        engine.sendKey("KEYCODE_APP_SWITCH")
+                    }
                 }
-                SimulatorSideButton(icon: "speaker.wave.3.fill", label: "Vol +", color: .white) {
-                    engine.sendKey("KEYCODE_VOLUME_UP")
-                }
-                SimulatorSideButton(icon: "speaker.wave.1.fill", label: "Vol -", color: .white) {
-                    engine.sendKey("KEYCODE_VOLUME_DOWN")
-                }
-                
-                Divider().background(Color.white.opacity(0.15)).frame(width: 28)
-                
-                SimulatorSideButton(icon: "house.fill", label: "Home", color: .white) {
-                    engine.sendKey("KEYCODE_HOME")
-                }
-                SimulatorSideButton(icon: "chevron.backward", label: "Back", color: .white) {
-                    engine.sendKey("KEYCODE_BACK")
-                }
-                SimulatorSideButton(icon: "square.stack.fill", label: "Apps", color: .white) {
-                    engine.sendKey("KEYCODE_APP_SWITCH")
-                }
-                
-                Spacer()
+                .padding(.vertical, 16)
+                .padding(.horizontal, 8)
             }
-            .padding(.vertical, 20)
-            .padding(.horizontal, 10)
-            .frame(width: 66)
+            .frame(width: 66, height: 640)
         }
         .background(VisualEffectView().ignoresSafeArea())
     }
 }
 
-// MARK: - Helper UI Components
+// MARK: - Helper Components
 struct TabButton: View {
     let icon: String
     let isSelected: Bool
@@ -348,7 +418,7 @@ struct SimulatorSideButton: View {
         Button(action: action) {
             VStack(spacing: 2) {
                 Image(systemName: icon)
-                    .font(.system(size: 15, weight: .semibold))
+                    .font(.system(size: 14, weight: .semibold))
                     .foregroundColor(color)
                     .frame(width: 36, height: 36)
                     .background(Circle().fill(Color(white: 0.18)))
