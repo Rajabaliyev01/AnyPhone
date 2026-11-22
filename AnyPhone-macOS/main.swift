@@ -1,72 +1,22 @@
 import SwiftUI
 import AppKit
 
-// MARK: - AnyPhone Device Manager
-class AnyPhoneManager: ObservableObject {
-    static let shared = AnyPhoneManager()
-    
-    @Published var isConnected: Bool = true
-    @Published var deviceName: String = "Samsung Galaxy A15"
-    @Published var connectionMode: String = "Wi-Fi (Wireless)"
-    
-    @Published var isCalling: Bool = false
-    @Published var dialNumber: String = ""
-    
-    var adbPath: String {
-        let qtAdb = "/Applications/QtScrcpy.app/Contents/MacOS/adb"
-        if FileManager.default.fileExists(atPath: qtAdb) {
-            return qtAdb
-        }
-        return NSString(string: "~/phone_mirror/platform-tools/adb").expandingTildeInPath
-    }
-    
-    func startMirroring() {
-        DispatchQueue.global(qos: .userInitiated).async {
-            let task = Process()
-            task.executableURL = URL(fileURLWithPath: "/bin/bash")
-            // Launch directly via clean engine without old Chinese UI
-            let script = NSString(string: "~/Desktop/Projects/AnyPhone/AnyPhone-macOS/launch_clean_mirror.sh").expandingTildeInPath
-            task.arguments = [script]
-            try? task.run()
-        }
-    }
-    
-    func makeCall(number: String) {
-        guard !number.isEmpty else { return }
-        let clean = number.replacingOccurrences(of: "#", with: "%23").replacingOccurrences(of: "+", with: "%2B")
-        runAdb("shell am start -a android.intent.action.CALL -d tel:\(clean)")
-        self.isCalling = true
-    }
-    
-    func endCall() {
-        runAdb("shell input keyevent KEYCODE_ENDCALL")
-        self.isCalling = false
-    }
-    
-    func pressKey(_ keycode: String) {
-        runAdb("shell input keyevent \(keycode)")
-    }
-    
-    private func runAdb(_ cmd: String) {
-        DispatchQueue.global(qos: .userInitiated).async {
-            let task = Process()
-            task.executableURL = URL(fileURLWithPath: "/bin/bash")
-            task.arguments = ["-c", "\(self.adbPath) \(cmd)"]
-            try? task.run()
-        }
-    }
-}
-
-// MARK: - Native Mirroring View
+// MARK: - Main Application View
 struct AnyPhoneAppView: View {
-    @StateObject private var manager = AnyPhoneManager.shared
-    @State private var selectedTab: Int = 0 // 0: Mirror, 1: Call
+    @StateObject private var detector = DeviceDetector.shared
+    @State private var selectedTab: Int = 0 // 0: Screen Mirror, 1: Calling, 2: Devices
+    @State private var dialNumber: String = ""
+    @State private var isConnectingWifi: Bool = false
+    
+    var currentDevice: DiscoveredDevice? {
+        detector.selectedDevice
+    }
     
     var body: some View {
         HStack(spacing: 0) {
-            // MARK: - Phone Frame
+            // MARK: - Phone Chassis Frame
             ZStack {
-                // Titanium Body
+                // Titanium Outer Chassis
                 RoundedRectangle(cornerRadius: 44, style: .continuous)
                     .fill(Color(white: 0.12))
                     .overlay(
@@ -87,9 +37,9 @@ struct AnyPhoneAppView: View {
                     .fill(Color(white: 0.05))
                     .padding(6)
                 
-                // Display Content
+                // Screen Content Area
                 VStack(spacing: 0) {
-                    // Dynamic Island / Speaker
+                    // Dynamic Island
                     HStack {
                         Spacer()
                         Capsule()
@@ -107,49 +57,58 @@ struct AnyPhoneAppView: View {
                     .padding(.top, 10)
                     
                     if selectedTab == 0 {
-                        // Mirroring Action Area
+                        // MARK: - Mirroring View
                         VStack(spacing: 16) {
                             Spacer()
                             
-                            Image(systemName: "iphone.gen3")
-                                .font(.system(size: 50, weight: .light))
-                                .foregroundColor(.white.opacity(0.4))
+                            Image(systemName: currentDevice?.isWireless == true ? "wifi" : "cable.connector")
+                                .font(.system(size: 44, weight: .light))
+                                .foregroundColor(.white.opacity(0.5))
                             
-                            Text(manager.deviceName)
+                            Text(currentDevice?.model ?? "No Device Connected")
                                 .font(.system(size: 16, weight: .semibold, design: .rounded))
                                 .foregroundColor(.white)
                             
-                            HStack(spacing: 6) {
-                                Circle().fill(Color.green).frame(width: 7, height: 7)
-                                Text("Connected via Wi-Fi")
-                                    .font(.system(size: 12, weight: .medium))
-                                    .foregroundColor(.green)
-                            }
-                            
-                            Button(action: {
-                                manager.startMirroring()
-                            }) {
-                                HStack(spacing: 8) {
-                                    Image(systemName: "play.fill")
-                                        .font(.system(size: 12))
-                                    Text("Start Mirroring")
-                                        .font(.system(size: 13, weight: .semibold))
+                            if let dev = currentDevice {
+                                HStack(spacing: 6) {
+                                    Circle().fill(dev.status == "device" ? Color.green : Color.orange).frame(width: 7, height: 7)
+                                    Text(dev.isWireless ? "Connected via Wi-Fi" : "Connected via USB")
+                                        .font(.system(size: 12, weight: .medium))
+                                        .foregroundColor(dev.status == "device" ? .green : .orange)
                                 }
-                                .foregroundColor(.white)
-                                .padding(.horizontal, 22)
-                                .padding(.vertical, 10)
-                                .background(Capsule().fill(Color.blue))
-                                .shadow(color: .blue.opacity(0.4), radius: 8, x: 0, y: 4)
+                                
+                                if !dev.isWireless {
+                                    Button(action: {
+                                        isConnectingWifi = true
+                                        detector.enableWirelessMode(for: dev) { _ in
+                                            isConnectingWifi = false
+                                        }
+                                    }) {
+                                        HStack(spacing: 6) {
+                                            if isConnectingWifi {
+                                                ProgressView().scaleEffect(0.6)
+                                            } else {
+                                                Image(systemName: "wifi")
+                                            }
+                                            Text("Switch to Wireless (Wi-Fi)")
+                                                .font(.system(size: 11, weight: .semibold))
+                                        }
+                                        .foregroundColor(.white)
+                                        .padding(.horizontal, 14)
+                                        .padding(.vertical, 7)
+                                        .background(Capsule().fill(Color.purple.opacity(0.8)))
+                                    }
+                                    .buttonStyle(.plain)
+                                    .padding(.top, 4)
+                                }
                             }
-                            .buttonStyle(.plain)
-                            .padding(.top, 8)
                             
                             Spacer()
                         }
-                    } else {
-                        // Phone Dialer View
+                    } else if selectedTab == 1 {
+                        // MARK: - Phone Calling View
                         VStack(spacing: 10) {
-                            Text(manager.dialNumber.isEmpty ? "Phone" : manager.dialNumber)
+                            Text(dialNumber.isEmpty ? "Phone" : dialNumber)
                                 .font(.system(size: 26, weight: .bold, design: .rounded))
                                 .foregroundColor(.white)
                                 .frame(height: 38)
@@ -165,7 +124,7 @@ struct AnyPhoneAppView: View {
                                     HStack(spacing: 14) {
                                         ForEach(row, id: \.self) { digit in
                                             Button(action: {
-                                                manager.dialNumber.append(digit)
+                                                dialNumber.append(digit)
                                                 NSSound.beep()
                                             }) {
                                                 Text(digit)
@@ -182,16 +141,16 @@ struct AnyPhoneAppView: View {
                             
                             HStack(spacing: 20) {
                                 Button(action: {
-                                    if !manager.dialNumber.isEmpty { manager.dialNumber.removeLast() }
+                                    if !dialNumber.isEmpty { dialNumber.removeLast() }
                                 }) {
                                     Image(systemName: "delete.left.fill")
                                         .font(.system(size: 18))
-                                        .foregroundColor(manager.dialNumber.isEmpty ? .clear : .secondary)
+                                        .foregroundColor(dialNumber.isEmpty ? .clear : .secondary)
                                         .frame(width: 44, height: 44)
                                 }
                                 .buttonStyle(.plain)
                                 
-                                Button(action: { manager.makeCall(number: manager.dialNumber) }) {
+                                Button(action: { makeCall(number: dialNumber) }) {
                                     ZStack {
                                         Circle().fill(Color.green).frame(width: 58, height: 58)
                                         Image(systemName: "phone.fill").font(.system(size: 22, weight: .bold)).foregroundColor(.white)
@@ -199,7 +158,7 @@ struct AnyPhoneAppView: View {
                                 }
                                 .buttonStyle(.plain)
                                 
-                                Button(action: { manager.endCall() }) {
+                                Button(action: { endCall() }) {
                                     ZStack {
                                         Circle().fill(Color.red).frame(width: 48, height: 48)
                                         Image(systemName: "phone.down.fill").font(.system(size: 18, weight: .bold)).foregroundColor(.white)
@@ -208,6 +167,59 @@ struct AnyPhoneAppView: View {
                                 .buttonStyle(.plain)
                             }
                             .padding(.top, 4)
+                        }
+                    } else {
+                        // MARK: - Devices Manager View
+                        VStack(spacing: 14) {
+                            Text("Available Devices")
+                                .font(.system(size: 15, weight: .semibold))
+                                .foregroundColor(.white)
+                                .padding(.top, 14)
+                            
+                            ScrollView {
+                                VStack(spacing: 8) {
+                                    ForEach(detector.devices) { dev in
+                                        Button(action: { detector.selectedDevice = dev }) {
+                                            HStack {
+                                                Image(systemName: dev.isWireless ? "wifi" : "cable.connector")
+                                                    .foregroundColor(dev.id == currentDevice?.id ? .blue : .secondary)
+                                                
+                                                VStack(alignment: .leading, spacing: 2) {
+                                                    Text(dev.model)
+                                                        .font(.system(size: 13, weight: .medium))
+                                                        .foregroundColor(.white)
+                                                    Text(dev.id)
+                                                        .font(.system(size: 10))
+                                                        .foregroundColor(.secondary)
+                                                }
+                                                Spacer()
+                                                if dev.id == currentDevice?.id {
+                                                    Image(systemName: "checkmark.circle.fill")
+                                                        .foregroundColor(.blue)
+                                                }
+                                            }
+                                            .padding(10)
+                                            .background(
+                                                RoundedRectangle(cornerRadius: 12)
+                                                    .fill(dev.id == currentDevice?.id ? Color.blue.opacity(0.2) : Color(white: 0.12))
+                                            )
+                                        }
+                                        .buttonStyle(.plain)
+                                    }
+                                }
+                                .padding(.horizontal, 10)
+                            }
+                            
+                            Button(action: { detector.refreshDevices() }) {
+                                HStack(spacing: 4) {
+                                    Image(systemName: "arrow.clockwise")
+                                    Text("Scan for Devices")
+                                }
+                                .font(.system(size: 12, weight: .medium))
+                                .foregroundColor(.blue)
+                            }
+                            .buttonStyle(.plain)
+                            .padding(.bottom, 14)
                         }
                     }
                     
@@ -229,29 +241,30 @@ struct AnyPhoneAppView: View {
             VStack(spacing: 14) {
                 TabButton(icon: "iphone.gen3", isSelected: selectedTab == 0) { selectedTab = 0 }
                 TabButton(icon: "phone.fill", isSelected: selectedTab == 1) { selectedTab = 1 }
+                TabButton(icon: "antenna.radiowaves.left.and.right", isSelected: selectedTab == 2) { selectedTab = 2 }
                 
                 Divider().background(Color.white.opacity(0.15)).frame(width: 28)
                 
                 SimulatorSideButton(icon: "power", label: "Power", color: .red) {
-                    manager.pressKey("KEYCODE_POWER")
+                    sendKey("KEYCODE_POWER")
                 }
                 SimulatorSideButton(icon: "speaker.wave.3.fill", label: "Vol +", color: .white) {
-                    manager.pressKey("KEYCODE_VOLUME_UP")
+                    sendKey("KEYCODE_VOLUME_UP")
                 }
                 SimulatorSideButton(icon: "speaker.wave.1.fill", label: "Vol -", color: .white) {
-                    manager.pressKey("KEYCODE_VOLUME_DOWN")
+                    sendKey("KEYCODE_VOLUME_DOWN")
                 }
                 
                 Divider().background(Color.white.opacity(0.15)).frame(width: 28)
                 
                 SimulatorSideButton(icon: "house.fill", label: "Home", color: .white) {
-                    manager.pressKey("KEYCODE_HOME")
+                    sendKey("KEYCODE_HOME")
                 }
                 SimulatorSideButton(icon: "chevron.backward", label: "Back", color: .white) {
-                    manager.pressKey("KEYCODE_BACK")
+                    sendKey("KEYCODE_BACK")
                 }
                 SimulatorSideButton(icon: "square.stack.fill", label: "Apps", color: .white) {
-                    manager.pressKey("KEYCODE_APP_SWITCH")
+                    sendKey("KEYCODE_APP_SWITCH")
                 }
                 
                 Spacer()
@@ -261,6 +274,32 @@ struct AnyPhoneAppView: View {
             .frame(width: 66)
         }
         .background(VisualEffectView().ignoresSafeArea())
+    }
+    
+    func makeCall(number: String) {
+        guard !number.isEmpty, let dev = currentDevice else { return }
+        let clean = number.replacingOccurrences(of: "#", with: "%23").replacingOccurrences(of: "+", with: "%2B")
+        runAdb("-s \(dev.id) shell am start -a android.intent.action.CALL -d tel:\(clean)")
+    }
+    
+    func endCall() {
+        guard let dev = currentDevice else { return }
+        runAdb("-s \(dev.id) shell input keyevent KEYCODE_ENDCALL")
+    }
+    
+    func sendKey(_ keycode: String) {
+        guard let dev = currentDevice else { return }
+        runAdb("-s \(dev.id) shell input keyevent \(keycode)")
+    }
+    
+    func runAdb(_ cmd: String) {
+        let path = detector.adbPath
+        DispatchQueue.global(qos: .userInitiated).async {
+            let task = Process()
+            task.executableURL = URL(fileURLWithPath: "/bin/bash")
+            task.arguments = ["-c", "\(path) \(cmd)"]
+            try? task.run()
+        }
     }
 }
 
