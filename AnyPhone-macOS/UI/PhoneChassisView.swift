@@ -109,6 +109,10 @@ class EngineController: ObservableObject {
     
     init() {
         refreshDevices()
+        DispatchQueue.global().asyncAfter(deadline: .now() + 1.0) { [weak self] in
+            guard let self = self else { return }
+            ScrcpyControlManager.shared.ensureControlService(adbPath: self.adbPath, serial: self.activeSerial)
+        }
     }
     
     func refreshDevices() {
@@ -220,11 +224,7 @@ class EngineController: ObservableObject {
     
     func togglePhysicalScreen() {
         isPhysicalScreenOff.toggle()
-        if isPhysicalScreenOff {
-            runAdb("shell cmd display power-off 0")
-        } else {
-            runAdb("shell cmd display power-reset 0")
-        }
+        ScrcpyControlManager.shared.setScreenPowerMode(off: isPhysicalScreenOff)
     }
     
     func sendKey(_ key: String) {
