@@ -168,10 +168,11 @@ class EngineController: ObservableObject {
     func togglePhysicalScreen() {
         isPhysicalScreenOff.toggle()
         if isPhysicalScreenOff {
-            runAdb("shell settings put system screen_brightness 0")
-            runAdb("shell settings put system screen_off_timeout 600000")
+            // Haqiqiy jismoniy ekranni to'liq o'chirish (Black out display 0)
+            runAdb("shell cmd display power-off 0")
         } else {
-            runAdb("shell settings put system screen_brightness 128")
+            // Ekranni qayta yoqish
+            runAdb("shell cmd display power-reset 0")
         }
     }
     
