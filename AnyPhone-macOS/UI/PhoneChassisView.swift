@@ -231,6 +231,22 @@ class EngineController: ObservableObject {
         runAdb("shell input keyevent \(key)")
     }
     
+    @Published var isSpeakerOn: Bool = false
+    
+    func toggleHandsfreeSpeaker() {
+        isSpeakerOn.toggle()
+        if isSpeakerOn {
+            // Android apparatli spikerfonni ochish va ovozni maksimal chiqarish
+            runAdb("shell cmd audio set-preferred-output-device BUILTIN_SPEAKER")
+            runAdb("shell cmd audio set-volume 0 5")
+            runAdb("shell input keyevent KEYCODE_SPEAKERPHONE")
+        } else {
+            // Standart quloq rejimiga qaytarish
+            runAdb("shell cmd audio set-preferred-output-device AUTO")
+            runAdb("shell input keyevent KEYCODE_SPEAKERPHONE")
+        }
+    }
+    
     func syncClipboardToPhone() {
         if let str = NSPasteboard.general.string(forType: .string) {
             let encoded = str.replacingOccurrences(of: " ", with: "%s")
@@ -379,15 +395,14 @@ struct PhoneChassisView: View {
                         .buttonStyle(PlainButtonStyle())
                         .help("Wi-Fi va USB o'rtasida almashtirish")
                         
-                        // Audio Bridge (Mac Speakers & Mic)
-                        SidebarIconButton(icon: AudioController.shared.isAudioStreaming ? "waveform.circle.fill" : "headphones", color: .indigo) {
-                            if AudioController.shared.isAudioStreaming {
-                                AudioController.shared.stopAudioBridge()
-                            } else {
-                                AudioController.shared.startAudioBridge(adbPath: controller.adbPath, serial: controller.activeSerial)
-                            }
+                        // Handsfree Speakerphone Toggle
+                        SidebarIconButton(
+                            icon: controller.isSpeakerOn ? "speaker.wave.3.bubble.fill" : "speaker.wave.2.fill",
+                            color: controller.isSpeakerOn ? .green : .indigo
+                        ) {
+                            controller.toggleHandsfreeSpeaker()
                         }
-                        .help("Mac dinamik va mikrofoni bilan ikki tomonlama audio")
+                        .help("Handsfree Spikerfon (stol ustidan erkin gaplashish)")
                         
                         Divider().background(Color.white.opacity(0.2))
                         
