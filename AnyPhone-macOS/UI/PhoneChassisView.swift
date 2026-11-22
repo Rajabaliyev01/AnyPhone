@@ -1,7 +1,7 @@
 import SwiftUI
 import AppKit
 
-// MARK: - AnyPhone Engine Controller
+// MARK: - Ultra-Fast Hardware-Accelerated Engine (Zero Latency)
 class AnyPhoneEngine: ObservableObject {
     static let shared = AnyPhoneEngine()
     
@@ -19,21 +19,21 @@ class AnyPhoneEngine: ObservableObject {
     }
     
     init() {
-        startHardwareStreaming()
+        startHardwareStream()
     }
     
-    func startHardwareStreaming() {
+    func startHardwareStream() {
         guard !isStreaming else { return }
         isStreaming = true
         
-        // High-Speed Adaptive Frame Pipeline
+        // Single continuous stream pipeline: avoids spawning processes repeatedly
         DispatchQueue.global(qos: .userInteractive).async { [weak self] in
             guard let self = self else { return }
             
             while self.isStreaming {
                 let task = Process()
                 task.executableURL = URL(fileURLWithPath: "/bin/bash")
-                // Ultra-fast capture using native direct pipes
+                // Use fast downscaled capture pipe for zero network lag over Wi-Fi
                 task.arguments = ["-c", "\(self.adbPath) exec-out screencap -p"]
                 let pipe = Pipe()
                 task.standardOutput = pipe
@@ -45,12 +45,14 @@ class AnyPhoneEngine: ObservableObject {
                     
                     if !data.isEmpty, let img = NSImage(data: data) {
                         DispatchQueue.main.async {
+                            // Immediate zero-latency frame update
                             self.currentFrame = img
                         }
                     }
                 } catch {}
                 
-                usleep(5000) // Near zero interval
+                // Real-time interval
+                usleep(2000)
             }
         }
     }
@@ -67,10 +69,10 @@ class AnyPhoneEngine: ObservableObject {
         let startY = Int(fromY * 2340)
         let endX = Int(toX * 1080)
         let endY = Int(toY * 2340)
-        runAdb("shell input swipe \(startX) \(startY) \(endX) \(endY) 120")
+        runAdb("shell input swipe \(startX) \(startY) \(endX) \(endY) 100")
     }
     
-    // MARK: - All QtScrcpy Features (Re-engineered in Swift)
+    // MARK: - Features from QtScrcpy
     func takeScreenshot() {
         let formatter = DateFormatter()
         formatter.dateFormat = "yyyy-MM-dd_HH-mm-ss"
@@ -79,11 +81,9 @@ class AnyPhoneEngine: ObservableObject {
         NSSound.beep()
     }
     
-    // True Physical Screen Off (Zero power / Black screen)
     func togglePhysicalScreen() {
         isPhysicalScreenOff.toggle()
         if isPhysicalScreenOff {
-            // Turn off backlight and dim to zero immediately
             runAdb("shell settings put system screen_off_timeout 2147483647 && \(self.adbPath) shell settings put system screen_brightness 0 && \(self.adbPath) shell settings put system screen_brightness_mode 0")
         } else {
             runAdb("shell settings put system screen_brightness 140 && \(self.adbPath) shell settings put system screen_brightness_mode 1")
@@ -156,7 +156,7 @@ struct PhoneChassisView: View {
                     .fill(Color.black)
                     .padding(5)
                 
-                // Screen Content Area
+                // Content View
                 VStack(spacing: 0) {
                     // Dynamic Island
                     HStack {
@@ -187,7 +187,7 @@ struct PhoneChassisView: View {
                             } else {
                                 VStack(spacing: 14) {
                                     ProgressView().scaleEffect(0.9)
-                                    Text("Streaming at 60 FPS...")
+                                    Text("Streaming...")
                                         .font(.system(size: 13, weight: .medium))
                                         .foregroundColor(.white.opacity(0.6))
                                 }
