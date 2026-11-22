@@ -1,43 +1,41 @@
 # 📱 AnyPhone
 
 <p align="center">
-  <b>Seamless Android Screen Mirroring & Calling Bridge for macOS</b><br>
-  <i>Built natively with Swift (macOS) and Java (Android)</i>
+  <b>High-Performance Android Screen Mirroring & Management Tool for macOS & Desktop</b><br>
+  <i>Empowered by AnyPhone Engine (C++, Qt & Java)</i>
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/macOS-13.0%2B-blue?logo=apple" alt="macOS" />
-  <img src="https://img.shields.io/badge/Android-10.0%2B-green?logo=android" alt="Android" />
-  <img src="https://img.shields.io/badge/Language-Swift%20%7C%20Java-orange" alt="Language" />
+  <img src="https://img.shields.io/badge/Platform-macOS%20%7C%20Windows%20%7C%20Linux-blue" alt="Platforms" />
+  <img src="https://img.shields.io/badge/Language-C%2B%2B%20%7C%20Qt%20%7C%20Java-orange" alt="Languages" />
+  <img src="https://img.shields.io/badge/Translations-Uzbek%20%7C%20Russian%20%7C%20English-green" alt="Languages" />
   <img src="https://img.shields.io/badge/License-Apache%202.0-brightgreen" alt="License" />
 </p>
 
 ---
 
-## 🌟 Overview
-**AnyPhone** is a lightweight, ultra-fast macOS application designed to bring the magic of Apple's **iPhone Mirroring** to **any Android phone** (including Samsung Galaxy A15, Google Pixel, Xiaomi, and more).
-
-Unlike heavy third-party emulators, AnyPhone communicates directly with Android internal hardware services to deliver:
-- ⚡ **Zero-latency (60 FPS) screen mirroring** powered by Apple VideoToolbox & Metal.
-- 📞 **Mac-to-Phone Calling:** Dial numbers directly from macOS, talk through your Mac's microphone, and listen through Mac speakers.
-- 📴 **Screen-Off Mode:** Control your Android device with the physical phone screen turned completely off (saving battery & keeping the phone cool).
-- 🖱 **Complete Touch & Keyboard Navigation:** Full swipe, click, scroll, and clipboard sync.
+## 🌟 Features
+- ⚡ **Ultra-Low Latency:** 30–60 FPS real-time Android screen mirroring via USB and Wi-Fi.
+- 🎨 **Modern macOS Theme:** Redesigned interface inspired by native Apple macOS styling with smooth controls.
+- 🌐 **Clean Trilingual Interface:** Fully localized in **O'zbekcha (Uzbek)**, **Русский (Russian)**, and **English**.
+- ⌨️ **Full Control:** Mouse, keyboard, clipboard synchronization, and custom keymappings.
+- 🔋 **Screen-Off Mode:** Mirror and operate your Android device while keeping the physical phone display turned off.
 
 ---
 
-## 🏗 Architecture
-- **`AnyPhone-macOS`**: Native macOS client written in **SwiftUI**. Handles video rendering, Mac audio capture/playback, and input events.
-- **`AnyPhone-Server`**: Lightweight Android service written in **Java**. Streams H.264/H.265 video frames and bridges two-way audio channels.
+## 🚀 Getting Started
 
----
+### 1. Requirements
+- macOS 11+ / Windows 10+ / Linux
+- Android 5.0+ with **USB Debugging** enabled
 
-## 🚀 Quick Start
-### Prerequisites
-1. Enable **Developer Options** and **USB Debugging** on your Android device.
-2. Connect your device via USB or ensure both Mac and Android are on the same Wi-Fi network.
+### 2. Connect
+1. Connect your Android phone to your Mac via USB cable.
+2. Allow USB Debugging prompt on your phone screen.
+3. Launch **AnyPhone** and click **Start Service** or **Wireless Connect**.
 
 ---
 
 ## 📄 License
-This project is licensed under the [Apache 2.0 License](LICENSE).
-Author: [Rajabaliyev01](https://github.com/Rajabaliyev01)
+Licensed under the [Apache 2.0 License](LICENSE).  
+Maintained by [Rajabaliyev01](https://github.com/Rajabaliyev01).
